@@ -56,12 +56,22 @@ macro_rules! entry_builtin {
     };
 }
 
-#[allow(unused)]
 macro_rules! entry_path {
     ($arg:expr, $path:expr, $tag:expr) => {
         entry(
             $arg.clone(),
             UntaggedValue::Primitive(Primitive::Path($path)).into_value($tag.clone()),
+            false,
+            $tag,
+        )
+    };
+}
+
+macro_rules! entry_sym_path {
+    ($arg:expr, $path:expr, $tag:expr) => {
+        entry(
+            $arg.clone(),
+            UntaggedValue::Primitive(Primitive::String($path)).into_value($tag.clone()),
             false,
             $tag,
         )
@@ -85,6 +95,7 @@ async fn which(args: CommandArgs) -> Result<OutputStream, ShellError> {
     } else {
         application.item.clone()
     };
+
     if !external {
         let builtin = scope.has_command(&item);
         if builtin {
@@ -99,11 +110,28 @@ async fn which(args: CommandArgs) -> Result<OutputStream, ShellError> {
     {
         if let Ok(paths) = ichwh::which_all(&item).await {
             for path in paths {
-                output.push(ReturnSuccess::value(entry_path!(
-                    item,
-                    path.into(),
-                    application.tag.clone()
-                )));
+                let symlink_metadata = path.symlink_metadata().await.expect("TODO 2");
+
+                if symlink_metadata.file_type().is_symlink() {
+                    let sym_str = path.as_path().to_str().expect("TODO 5");
+
+                    let final_path = path.canonicalize().await.expect("TODO 5");
+                    let dest_str = final_path.to_str().expect("TODO 4");
+
+                    let path_str = format!("alias: {} -> {}", sym_str, dest_str);
+
+                    output.push(ReturnSuccess::value(entry_sym_path!(
+                        item,
+                        path_str,
+                        application.tag.clone()
+                    )));
+                } else {
+                    output.push(ReturnSuccess::value(entry_path!(
+                        item,
+                        path.into(),
+                        application.tag.clone()
+                    )));
+                }
             }
         }
     }
