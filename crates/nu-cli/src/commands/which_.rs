@@ -1,10 +1,10 @@
 use crate::commands::WholeStreamCommand;
 use crate::prelude::*;
+use async_std::path::PathBuf;
 use indexmap::map::IndexMap;
 use nu_errors::ShellError;
 use nu_protocol::{Primitive, ReturnSuccess, Signature, SyntaxShape, UntaggedValue, Value};
 use nu_source::Tagged;
-use std::path::PathBuf;
 
 pub struct Which;
 
@@ -149,6 +149,7 @@ async fn push_alias(
 
     let canonicalized_path = path
         .canonicalize()
+        .await
         .expect("Cannicalized path could not be derived.");
     let canonicalized_str = canonicalized_path
         .to_str()
