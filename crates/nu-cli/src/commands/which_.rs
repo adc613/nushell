@@ -4,6 +4,7 @@ use indexmap::map::IndexMap;
 use nu_errors::ShellError;
 use nu_protocol::{Primitive, ReturnSuccess, Signature, SyntaxShape, UntaggedValue, Value};
 use nu_source::Tagged;
+use std::path::PathBuf;
 
 pub struct Which;
 
@@ -56,6 +57,7 @@ macro_rules! entry_builtin {
     };
 }
 
+#[allow(unused)]
 macro_rules! entry_path {
     ($arg:expr, $path:expr, $tag:expr) => {
         entry(
@@ -95,7 +97,6 @@ async fn which(args: CommandArgs) -> Result<OutputStream, ShellError> {
     } else {
         application.item.clone()
     };
-
     if !external {
         let builtin = scope.has_command(&item);
         if builtin {
@@ -110,21 +111,13 @@ async fn which(args: CommandArgs) -> Result<OutputStream, ShellError> {
     {
         if let Ok(paths) = ichwh::which_all(&item).await {
             for path in paths {
-                let symlink_metadata = path.symlink_metadata().await.expect("TODO 2");
+                let symlink_metadata = path
+                    .symlink_metadata()
+                    .await
+                    .expect("Failed to acquery path metadata.");
 
                 if symlink_metadata.file_type().is_symlink() {
-                    let sym_str = path.as_path().to_str().expect("TODO 5");
-
-                    let final_path = path.canonicalize().await.expect("TODO 5");
-                    let dest_str = final_path.to_str().expect("TODO 4");
-
-                    let path_str = format!("alias: {} -> {}", sym_str, dest_str);
-
-                    output.push(ReturnSuccess::value(entry_sym_path!(
-                        item,
-                        path_str,
-                        application.tag.clone()
-                    )));
+                    push_alias(&mut output, &item, path, &application).await;
                 } else {
                     output.push(ReturnSuccess::value(entry_path!(
                         item,
@@ -141,6 +134,33 @@ async fn which(args: CommandArgs) -> Result<OutputStream, ShellError> {
     } else {
         Ok(futures::stream::iter(output.into_iter().take(1)).to_output_stream())
     }
+}
+
+async fn push_alias(
+    output: &mut Vec<Result<ReturnSuccess, ShellError>>,
+    item: &String,
+    path: PathBuf,
+    application: &Tagged<String>,
+) -> () {
+    let path_str = path
+        .as_path()
+        .to_str()
+        .expect("Path could not be converted to string.");
+
+    let canonicalized_path = path
+        .canonicalize()
+        .expect("Cannicalized path could not be derived.");
+    let canonicalized_str = canonicalized_path
+        .to_str()
+        .expect("Cannicalized path could not be converted to string.");
+
+    let path_str = format!("alias: {} -> {}", path_str, canonicalized_str);
+
+    output.push(ReturnSuccess::value(entry_sym_path!(
+        item,
+        path_str,
+        application.tag.clone()
+    )));
 }
 
 #[cfg(test)]
