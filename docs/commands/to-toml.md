@@ -58,7 +58,6 @@ dunce = "1.0.0"
 futures-sink-preview = "0.3.0-alpha.16"
 futures_codec = "0.2.2"
 getset = "0.0.7"
-git2 = "0.8.0"
 itertools = "0.8.0"
 lalrpop-util = "0.17.0"
 language-reporting = "0.3.0"
@@ -88,7 +87,7 @@ version = "0.4.6"
 [dependencies.cursive]
 default-features = false
 features = ["pancurses-backend"]
-version = "0.24.2"
+version = "0.26.1"
 
 [dependencies.futures-preview]
 features = ["compat", "io-compat"]

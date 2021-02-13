@@ -9,7 +9,7 @@ use crate::line::Line;
 
 use std::{
     error::Error,
-    io::{stdout, Write},
+    io::stdout,
     sync::mpsc,
     thread,
     time::{Duration, Instant},
@@ -128,7 +128,7 @@ impl Plugin for SubCommand {
     fn config(&mut self) -> Result<Signature, ShellError> {
         Ok(Signature::build("chart line")
             .desc("Line charts")
-            .switch("acc", "accumuate values", Some('a'))
+            .switch("acc", "accumulate values", Some('a'))
             .optional(
                 "columns",
                 SyntaxShape::Any,

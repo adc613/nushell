@@ -61,9 +61,21 @@ fn collect_values(input: &[Value]) -> Result<Vec<toml::Value>, ShellError> {
 // Helper method to recursively convert nu_protocol::Value -> toml::Value
 // This shouldn't be called at the top-level
 fn helper(v: &Value) -> Result<toml::Value, ShellError> {
+    use bigdecimal::ToPrimitive;
+
     Ok(match &v.value {
         UntaggedValue::Primitive(Primitive::Boolean(b)) => toml::Value::Boolean(*b),
-        UntaggedValue::Primitive(Primitive::Filesize(b)) => toml::Value::Integer(*b as i64),
+        UntaggedValue::Primitive(Primitive::Filesize(b)) => {
+            if let Some(value) = b.to_i64() {
+                toml::Value::Integer(value)
+            } else {
+                return Err(ShellError::labeled_error(
+                    "Value too large to convert to toml value",
+                    "value too large",
+                    v.tag.span,
+                ));
+            }
+        }
         UntaggedValue::Primitive(Primitive::Duration(i)) => toml::Value::String(i.to_string()),
         UntaggedValue::Primitive(Primitive::Date(d)) => toml::Value::String(d.to_string()),
         UntaggedValue::Primitive(Primitive::EndOfStream) => {
@@ -81,10 +93,9 @@ fn helper(v: &Value) -> Result<toml::Value, ShellError> {
         UntaggedValue::Primitive(Primitive::Nothing) => {
             toml::Value::String("<Nothing>".to_string())
         }
-        UntaggedValue::Primitive(Primitive::Pattern(s)) => toml::Value::String(s.clone()),
+        UntaggedValue::Primitive(Primitive::GlobPattern(s)) => toml::Value::String(s.clone()),
         UntaggedValue::Primitive(Primitive::String(s)) => toml::Value::String(s.clone()),
-        UntaggedValue::Primitive(Primitive::Line(s)) => toml::Value::String(s.clone()),
-        UntaggedValue::Primitive(Primitive::Path(s)) => {
+        UntaggedValue::Primitive(Primitive::FilePath(s)) => {
             toml::Value::String(s.display().to_string())
         }
         UntaggedValue::Primitive(Primitive::ColumnPath(path)) => toml::Value::Array(
@@ -146,7 +157,7 @@ pub fn value_to_toml_value(v: &Value) -> Result<toml::Value, ShellError> {
 
 #[cfg(feature = "directories")]
 pub fn config_path() -> Result<PathBuf, ShellError> {
-    use directories::ProjectDirs;
+    use directories_next::ProjectDirs;
 
     let dir = ProjectDirs::from("org", "nushell", "nu")
         .ok_or_else(|| ShellError::untagged_runtime_error("Couldn't find project directory"))?;
@@ -182,7 +193,7 @@ pub fn default_path_for(file: &Option<PathBuf>) -> Result<PathBuf, ShellError> {
 
 #[cfg(feature = "directories")]
 pub fn user_data() -> Result<PathBuf, ShellError> {
-    use directories::ProjectDirs;
+    use directories_next::ProjectDirs;
 
     let dir = ProjectDirs::from("org", "nushell", "nu")
         .ok_or_else(|| ShellError::untagged_runtime_error("Couldn't find project directory"))?;

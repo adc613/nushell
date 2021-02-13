@@ -628,16 +628,6 @@ pub fn replace_data_at_column_path(
 
 pub fn as_column_path(value: &Value) -> Result<Tagged<ColumnPath>, ShellError> {
     match &value.value {
-        UntaggedValue::Table(table) => {
-            let mut out: Vec<PathMember> = vec![];
-
-            for item in table {
-                out.push(as_path_member(item)?);
-            }
-
-            Ok(ColumnPath::new(out).tagged(&value.tag))
-        }
-
         UntaggedValue::Primitive(Primitive::String(s)) => {
             let s = s.to_string().spanned(value.tag.span);
 
@@ -680,7 +670,7 @@ pub fn as_string(value: &Value) -> Result<String, ShellError> {
         UntaggedValue::Primitive(Primitive::Decimal(x)) => Ok(format!("{}", x)),
         UntaggedValue::Primitive(Primitive::Int(x)) => Ok(format!("{}", x)),
         UntaggedValue::Primitive(Primitive::Filesize(x)) => Ok(format!("{}", x)),
-        UntaggedValue::Primitive(Primitive::Path(x)) => Ok(format!("{}", x.display())),
+        UntaggedValue::Primitive(Primitive::FilePath(x)) => Ok(format!("{}", x.display())),
         UntaggedValue::Primitive(Primitive::ColumnPath(path)) => Ok(path
             .iter()
             .map(|member| match &member.unspanned {

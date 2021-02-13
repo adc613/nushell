@@ -333,6 +333,30 @@ fn string_interpolation_with_it_column_path() {
 }
 
 #[test]
+fn bignum_large_integer() {
+    let actual = nu!(
+        cwd: ".",
+        r#"
+            echo 91231720741731287123917
+        "#
+    );
+
+    assert_eq!(actual.out, "91231720741731287123917");
+}
+
+#[test]
+fn bignum_large_decimal() {
+    let actual = nu!(
+        cwd: ".",
+        r#"
+            echo 91231720741731287123917.1
+        "#
+    );
+
+    assert_eq!(actual.out, "91231720741731287123917.1");
+}
+
+#[test]
 fn run_custom_command() {
     let actual = nu!(
         cwd: ".",
@@ -381,12 +405,72 @@ fn run_custom_subcommand() {
 }
 
 #[test]
+fn run_inner_custom_command() {
+    let actual = nu!(
+        cwd: ".",
+        r#"
+          def outer [x] { def inner [y] { echo $y }; inner $x }; outer 10
+        "#
+    );
+
+    assert_eq!(actual.out, "10");
+}
+
+#[test]
+fn run_broken_inner_custom_command() {
+    let actual = nu!(
+        cwd: ".",
+        r#"
+        def outer [x] { def inner [y] { echo $y }; inner $x }; inner 10
+        "#
+    );
+
+    assert!(actual.err.contains("not found"));
+}
+
+#[test]
+fn run_custom_command_with_rest() {
+    let actual = nu!(
+        cwd: ".",
+        r#"
+            def rest-me [...rest: string] { echo $rest.1 $rest.0}; rest-me "hello" "world" | to json
+        "#
+    );
+
+    assert_eq!(actual.out, r#"["world","hello"]"#);
+}
+
+#[test]
+fn run_custom_command_with_rest_and_arg() {
+    let actual = nu!(
+        cwd: ".",
+        r#"
+            def rest-me-with-arg [name: string, ...rest: string] { echo $rest.1 $rest.0 $name}; rest-me-with-arg "hello" "world" "yay" | to json
+        "#
+    );
+
+    assert_eq!(actual.out, r#"["yay","world","hello"]"#);
+}
+
+#[test]
+fn run_custom_command_with_rest_and_flag() {
+    let actual = nu!(
+        cwd: ".",
+        r#"
+            def rest-me-with-flag [--name: string, ...rest: string] { echo $rest.1 $rest.0 $name}; rest-me-with-flag "hello" "world" --name "yay" | to json
+        "#
+    );
+
+    assert_eq!(actual.out, r#"["world","hello","yay"]"#);
+}
+
+#[test]
 fn set_variable() {
     let actual = nu!(
         cwd: ".",
         r#"
-            set x = 5
-            set y = 12
+            let x = 5
+            let y = 12
             = $x + $y
         "#
     );
@@ -395,16 +479,62 @@ fn set_variable() {
 }
 
 #[test]
+fn set_doesnt_leak() {
+    let actual = nu!(
+        cwd: ".",
+        r#"
+        do { let x = 5 }; echo $x
+        "#
+    );
+
+    assert!(actual.err.contains("unknown variable"));
+}
+
+#[test]
 fn set_env_variable() {
     let actual = nu!(
         cwd: ".",
         r#"
-            set-env TESTENVVAR = "hello world"
+            let-env TESTENVVAR = "hello world"
             echo $nu.env.TESTENVVAR
         "#
     );
 
     assert_eq!(actual.out, "hello world");
+}
+
+#[test]
+fn set_env_doesnt_leak() {
+    let actual = nu!(
+        cwd: ".",
+        r#"
+        do { let-env xyz = "my message" }; echo $nu.env.xyz
+        "#
+    );
+
+    assert!(actual.err.contains("did you mean"));
+}
+
+#[test]
+fn proper_shadow_set_env_aliases() {
+    let actual = nu!(
+        cwd: ".",
+        r#"
+        let-env DEBUG = true; echo $nu.env.DEBUG | autoview; do { let-env DEBUG = false; echo $nu.env.DEBUG } | autoview; echo $nu.env.DEBUG
+        "#
+    );
+    assert_eq!(actual.out, "truefalsetrue");
+}
+
+#[test]
+fn proper_shadow_set_aliases() {
+    let actual = nu!(
+        cwd: ".",
+        r#"
+        let DEBUG = false; echo $DEBUG | autoview; do { let DEBUG = true; echo $DEBUG } | autoview; echo $DEBUG
+        "#
+    );
+    assert_eq!(actual.out, "falsetruefalse");
 }
 
 #[cfg(feature = "which")]
@@ -426,6 +556,54 @@ fn can_process_one_row_from_internal_and_pipes_it_to_stdin_of_external() {
     );
 
     assert_eq!(actual.out, "nushell");
+}
+
+#[test]
+fn index_out_of_bounds() {
+    let actual = nu!(
+        cwd: ".",
+        r#"
+            let foo = [1, 2, 3]; echo $foo.5
+        "#
+    );
+
+    assert!(actual.err.contains("unknown row"));
+}
+
+#[test]
+fn index_row() {
+    let actual = nu!(
+        cwd: ".",
+        r#"
+        let foo = [[name]; [joe] [bob]]; echo $foo.1 | to json
+        "#
+    );
+
+    assert_eq!(actual.out, r#"{"name":"bob"}"#);
+}
+
+#[test]
+fn index_cell() {
+    let actual = nu!(
+        cwd: ".",
+        r#"
+        let foo = [[name]; [joe] [bob]]; echo $foo.name.1
+        "#
+    );
+
+    assert_eq!(actual.out, "bob");
+}
+
+#[test]
+fn index_cell_alt() {
+    let actual = nu!(
+        cwd: ".",
+        r#"
+        let foo = [[name]; [joe] [bob]]; echo $foo.1.name
+        "#
+    );
+
+    assert_eq!(actual.out, "bob");
 }
 
 #[test]
@@ -573,6 +751,91 @@ fn range_with_mixed_types() {
 }
 
 #[test]
+fn filesize_math() {
+    let actual = nu!(
+        cwd: ".",
+        r#"
+        = 100 * 10kb
+        "#
+    );
+
+    assert_eq!(actual.out, "1000.0 KB");
+    // why 1000.0 KB instead of 1.0 MB?
+    // looks like `byte.get_appropriate_unit(false)` behaves this way
+}
+
+#[test]
+fn filesize_math2() {
+    let actual = nu!(
+        cwd: ".",
+        r#"
+        = 100 / 10kb
+        "#
+    );
+
+    assert!(actual.err.contains("Coercion"));
+}
+
+#[test]
+fn filesize_math3() {
+    let actual = nu!(
+        cwd: ".",
+        r#"
+        = 100kb / 10
+        "#
+    );
+
+    assert_eq!(actual.out, "10.0 KB");
+}
+#[test]
+fn filesize_math4() {
+    let actual = nu!(
+        cwd: ".",
+        r#"
+        = 100kb * 5
+        "#
+    );
+
+    assert_eq!(actual.out, "500.0 KB");
+}
+
+#[test]
+fn filesize_math5() {
+    let actual = nu!(
+        cwd: ".",
+        r#"
+        = 1001 * 1kb
+        "#
+    );
+
+    assert_eq!(actual.out, "1.0 MB");
+}
+
+#[test]
+fn filesize_math6() {
+    let actual = nu!(
+        cwd: ".",
+        r#"
+        = 1001 * 1mb
+        "#
+    );
+
+    assert_eq!(actual.out, "1.0 GB");
+}
+
+#[test]
+fn filesize_math7() {
+    let actual = nu!(
+        cwd: ".",
+        r#"
+        = 1001 * 1gb
+        "#
+    );
+
+    assert_eq!(actual.out, "1.0 TB");
+}
+
+#[test]
 fn exclusive_range_with_mixed_types() {
     let actual = nu!(
         cwd: ".",
@@ -714,5 +977,75 @@ mod tilde_expansion {
         );
 
         assert_eq!(actual.out, "1~1");
+    }
+}
+
+mod variable_scoping {
+    use nu_test_support::nu;
+
+    macro_rules! test_variable_scope {
+        ($func:literal == $res:literal $(,)*) => {
+            let actual = nu!(
+                cwd: ".",
+                $func
+            );
+
+            assert_eq!(actual.out, $res);
+        };
+    }
+    macro_rules! test_variable_scope_list {
+        ($func:literal == $res:expr $(,)*) => {
+            let actual = nu!(
+                cwd: ".",
+                $func
+            );
+
+            let result: Vec<&str> = actual.out.matches("ZZZ").collect();
+            assert_eq!(result, $res);
+        };
+    }
+
+    #[test]
+    fn access_variables_in_scopes() {
+        test_variable_scope!(
+            r#" def test [input] { echo [0 1 2] | do { do { echo $input } } }
+                test ZZZ "#
+                == "ZZZ"
+        );
+        test_variable_scope!(
+            r#" def test [input] { echo [0 1 2] | do { do { if $input == "ZZZ" { echo $input } { echo $input } } } }
+                test ZZZ "#
+                == "ZZZ"
+        );
+        test_variable_scope!(
+            r#" def test [input] { echo [0 1 2] | do { do { if $input == "ZZZ" { echo $input } { echo $input } } } }
+                test ZZZ "#
+                == "ZZZ"
+        );
+        test_variable_scope!(
+            r#" def test [input] { echo [0 1 2] | do { echo $input } }
+                test ZZZ "#
+                == "ZZZ"
+        );
+        test_variable_scope!(
+            r#" def test [input] { echo [0 1 2] | do { if $input == $input { echo $input } { echo $input } } }
+                test ZZZ "#
+                == "ZZZ"
+        );
+        test_variable_scope_list!(
+            r#" def test [input] { echo [0 1 2] | each { echo $input } }
+                test ZZZ "#
+                == ["ZZZ", "ZZZ", "ZZZ"]
+        );
+        test_variable_scope_list!(
+            r#" def test [input] { echo [0 1 2] | each { if $it > 0 {echo $input} {echo $input}} }
+                test ZZZ "#
+                == ["ZZZ", "ZZZ", "ZZZ"]
+        );
+        test_variable_scope_list!(
+            r#" def test [input] { echo [0 1 2] | each { if $input == $input {echo $input} {echo $input}} }
+                test ZZZ "#
+                == ["ZZZ", "ZZZ", "ZZZ"]
+        );
     }
 }

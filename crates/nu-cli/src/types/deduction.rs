@@ -1,6 +1,8 @@
 #![allow(dead_code)]
-use crate::prelude::*;
+use itertools::{merge_join_by, EitherOrBoth, Itertools};
 use lazy_static::lazy_static;
+use log::trace;
+use nu_engine::Scope;
 use nu_errors::ShellError;
 use nu_parser::ParserScope;
 use nu_protocol::{
@@ -13,9 +15,6 @@ use nu_protocol::{
 use nu_source::Span;
 use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, hash::Hash};
-
-use itertools::{merge_join_by, EitherOrBoth, Itertools};
-use log::trace;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VarDeclaration {
@@ -212,7 +211,7 @@ fn get_result_shape_of(
     l_shape: SyntaxShape,
     op_expr: &SpannedExpression,
     r_shape: SyntaxShape,
-) -> Result<SyntaxShape, ShellError> {
+) -> SyntaxShape {
     let op = match op_expr.expr {
         Expression::Literal(Literal::Operator(op)) => op,
         _ => unreachable!("Passing anything but the op expr is invalid"),
@@ -221,7 +220,7 @@ fn get_result_shape_of(
     //There is some code for that in the evaluator already.
     //One might reuse it.
     //For now we ignore this issue
-    Ok(match op {
+    match op {
         Operator::Equal
         | Operator::NotEqual
         | Operator::LessThan
@@ -258,7 +257,8 @@ fn get_result_shape_of(
             }
         }
         Operator::Modulo => SyntaxShape::Number,
-    })
+        Operator::Pow => SyntaxShape::Number,
+    }
 }
 
 fn get_shape_of_expr(expr: &SpannedExpression) -> Option<SyntaxShape> {
@@ -296,7 +296,7 @@ fn get_shape_of_expr(expr: &SpannedExpression) -> Option<SyntaxShape> {
         Expression::Boolean(_) => Some(SyntaxShape::String),
 
         Expression::Path(_) => Some(SyntaxShape::ColumnPath),
-        Expression::FilePath(_) => Some(SyntaxShape::Path),
+        Expression::FilePath(_) => Some(SyntaxShape::FilePath),
         Expression::Block(_) => Some(SyntaxShape::Block),
         Expression::ExternalCommand(_) => Some(SyntaxShape::String),
         Expression::Table(_, _) => Some(SyntaxShape::Table),
@@ -334,7 +334,7 @@ fn get_result_shape_of_math_expr(
     //match lhs, rhs
     match (shapes[0], shapes[1]) {
         (None, None) | (None, _) | (_, None) => Ok(None),
-        (Some(left), Some(right)) => get_result_shape_of(left, &bin.op, right).map(Some),
+        (Some(left), Some(right)) => Ok(Some(get_result_shape_of(left, &bin.op, right))),
     }
 }
 
@@ -861,7 +861,7 @@ impl VarSyntaxShapeDeductor {
                         }
                     }
                 }
-                Operator::Multiply | Operator::Divide => {
+                Operator::Multiply | Operator::Divide | Operator::Pow => {
                     if let Some(shape) = self.get_shape_of_binary_arg_or_insert_dependency(
                         (var, expr),
                         bin_spanned,

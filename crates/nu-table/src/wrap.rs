@@ -74,7 +74,7 @@ pub fn split_sublines(input: &str) -> Vec<Vec<Subline>> {
         .collect::<Vec<_>>()
 }
 
-pub fn column_width<'a>(input: &[Vec<Subline<'a>>]) -> usize {
+pub fn column_width(input: &[Vec<Subline>]) -> usize {
     let mut max = 0;
 
     for line in input {
@@ -100,7 +100,7 @@ pub fn column_width<'a>(input: &[Vec<Subline<'a>>]) -> usize {
     max
 }
 
-fn split_word<'a>(cell_width: usize, word: &'a str) -> Vec<Subline<'a>> {
+fn split_word(cell_width: usize, word: &str) -> Vec<Subline> {
     use unicode_width::UnicodeWidthChar;
 
     let mut output = vec![];
@@ -139,6 +139,8 @@ pub fn wrap<'a>(
     cell_width: usize,
     mut input: impl Iterator<Item = Subline<'a>>,
     color_hm: &HashMap<String, Style>,
+    re_leading: &regex::Regex,
+    re_trailing: &regex::Regex,
 ) -> (Vec<WrappedLine>, usize) {
     let mut lines = vec![];
     let mut current_line: Vec<Subline> = vec![];
@@ -249,15 +251,11 @@ pub fn wrap<'a>(
             bg_color_string = Style::default().on(bg).prefix().to_string()
         };
 
-        let re_leading =
-            regex::Regex::new(r"(?P<beginsp>^\s+)").expect("error with leading space regex");
         if let Some(leading_match) = re_leading.find(&current_line.clone()) {
             String::insert_str(&mut current_line, leading_match.end(), "\x1b[0m");
             String::insert_str(&mut current_line, leading_match.start(), &bg_color_string);
         }
 
-        let re_trailing =
-            regex::Regex::new(r"(?P<endsp>\s+$)").expect("error with trailing space regex");
         if let Some(trailing_match) = re_trailing.find(&current_line.clone()) {
             String::insert_str(&mut current_line, trailing_match.start(), &bg_color_string);
             current_line += "\x1b[0m";

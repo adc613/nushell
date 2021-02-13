@@ -1,8 +1,8 @@
 use derive_new::new;
 use getset::Getters;
 use nu_source::{
-    b, span_for_spanned_list, DebugDocBuilder, HasFallibleSpan, PrettyDebug, Span, Spanned,
-    SpannedItem,
+    span_for_spanned_list, DbgDocBldr, DebugDocBuilder, HasFallibleSpan, PrettyDebug, Span,
+    Spanned, SpannedItem,
 };
 use num_bigint::BigInt;
 use serde::{Deserialize, Serialize};
@@ -38,13 +38,13 @@ impl PrettyDebug for &PathMember {
     /// Gets the PathMember ready to be pretty-printed
     fn pretty(&self) -> DebugDocBuilder {
         match &self.unspanned {
-            UnspannedPathMember::String(string) => b::primitive(format!("{:?}", string)),
-            UnspannedPathMember::Int(int) => b::primitive(format!("{}", int)),
+            UnspannedPathMember::String(string) => DbgDocBldr::primitive(format!("{:?}", string)),
+            UnspannedPathMember::Int(int) => DbgDocBldr::primitive(format!("{}", int)),
         }
     }
 }
 
-/// The fundamental path primitive to descrive how to navigate through a table to get to a sub-item. A path member can be either a word or a number. Words/strings are taken to mean
+/// The fundamental path primitive to describe how to navigate through a table to get to a sub-item. A path member can be either a word or a number. Words/strings are taken to mean
 /// a column name, and numbers are the row number. Taken together they describe which column or row to narrow to in order to get data.
 ///
 /// Rows must follow column names, they can't come first. eg) `foo.1` is valid where `1.foo` is not.
@@ -96,9 +96,11 @@ impl PrettyDebug for ColumnPath {
         let members: Vec<DebugDocBuilder> =
             self.members.iter().map(|member| member.pretty()).collect();
 
-        b::delimit(
+        DbgDocBldr::delimit(
             "(",
-            b::description("path") + b::equals() + b::intersperse(members, b::space()),
+            DbgDocBldr::description("path")
+                + DbgDocBldr::equals()
+                + DbgDocBldr::intersperse(members, DbgDocBldr::space()),
             ")",
         )
         .nest()

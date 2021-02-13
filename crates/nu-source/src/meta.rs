@@ -1,4 +1,4 @@
-use crate::pretty::{b, DebugDocBuilder, PrettyDebugWithSource};
+use crate::pretty::{DbgDocBldr, DebugDocBuilder, PrettyDebugWithSource};
 use crate::text::Text;
 
 use derive_new::new;
@@ -48,13 +48,17 @@ impl Spanned<String> {
     ) -> impl Iterator<Item = &'a str> {
         items.map(|item| &item.item[..])
     }
-}
 
-impl Spanned<String> {
     /// Borrows the contained String
     pub fn borrow_spanned(&self) -> Spanned<&str> {
         let span = self.span;
         self.item[..].spanned(span)
+    }
+
+    pub fn slice_spanned(&self, span: impl Into<Span>) -> Spanned<&str> {
+        let span = span.into();
+        let item = &self.item[span.start()..span.end()];
+        item.spanned(span)
     }
 }
 
@@ -334,7 +338,7 @@ impl Tag {
         }
     }
 
-    /// Creates a `Tag` for the given `AnchorLocatrion` with unknown `Span` position.
+    /// Creates a `Tag` for the given `AnchorLocation` with unknown `Span` position.
     pub fn unknown_span(anchor: AnchorLocation) -> Tag {
         Tag {
             anchor: Some(anchor),
@@ -376,7 +380,7 @@ impl Tag {
     ///
     /// Both `Tag`s must share the same `AnchorLocation`.
     /// The resulting `Tag` will have a `Span` that starts from the current `Tag` and ends at `Span` of the given `Tag`.
-    /// Should the `None` variant be passed in, a new `Tag` with the same `Span` and `Anchorlocation` will be returned.
+    /// Should the `None` variant be passed in, a new `Tag` with the same `Span` and `AnchorLocation` will be returned.
     pub fn until_option(&self, other: Option<impl Into<Tag>>) -> Tag {
         match other {
             Some(other) => {
@@ -399,7 +403,7 @@ impl Tag {
         self.span.slice(source)
     }
 
-    pub fn string<'a>(&self, source: &'a str) -> String {
+    pub fn string(&self, source: &str) -> String {
         self.span.slice(source).to_string()
     }
 
@@ -407,7 +411,7 @@ impl Tag {
         self.span.slice(source).tagged(self)
     }
 
-    pub fn tagged_string<'a>(&self, source: &'a str) -> Tagged<String> {
+    pub fn tagged_string(&self, source: &str) -> Tagged<String> {
         self.span.slice(source).to_string().tagged(self)
     }
 
@@ -494,6 +498,19 @@ impl Span {
     /// Creates a new `Span` that has 0 start and 0 end.
     pub fn unknown() -> Span {
         Span::new(0, 0)
+    }
+
+    pub fn from_list(list: &[impl HasSpan]) -> Span {
+        let mut iterator = list.iter();
+
+        match iterator.next() {
+            None => Span::new(0, 0),
+            Some(first) => {
+                let last = iterator.last().unwrap_or(first);
+
+                Span::new(first.span().start, last.span().end)
+            }
+        }
     }
 
     /// Creates a new `Span` from start and end inputs. The end parameter must be greater than or equal to the start parameter.
@@ -595,7 +612,7 @@ impl Span {
         }
     }
 
-    pub fn string<'a>(&self, source: &'a str) -> String {
+    pub fn string(&self, source: &str) -> String {
         self.slice(source).to_string()
     }
 
@@ -603,7 +620,7 @@ impl Span {
         self.slice(source).spanned(*self)
     }
 
-    pub fn spanned_string<'a>(&self, source: &'a str) -> Spanned<String> {
+    pub fn spanned_string(&self, source: &str) -> Spanned<String> {
         self.slice(source).to_string().spanned(*self)
     }
 
@@ -734,7 +751,7 @@ where
 impl PrettyDebugWithSource for Option<Span> {
     fn pretty_debug(&self, source: &str) -> DebugDocBuilder {
         match self {
-            None => b::description("no span"),
+            None => DbgDocBldr::description("no span"),
             Some(span) => span.pretty_debug(source),
         }
     }
@@ -748,9 +765,11 @@ impl HasFallibleSpan for Option<Span> {
 
 impl PrettyDebugWithSource for Span {
     fn pretty_debug(&self, source: &str) -> DebugDocBuilder {
-        b::typed(
+        DbgDocBldr::typed(
             "span",
-            b::keyword("for") + b::space() + b::description(format!("{:?}", self.slice(source))),
+            DbgDocBldr::keyword("for")
+                + DbgDocBldr::space()
+                + DbgDocBldr::description(format!("{:?}", self.slice(source))),
         )
     }
 }
@@ -767,7 +786,7 @@ where
 {
     fn pretty_debug(&self, source: &str) -> DebugDocBuilder {
         match self {
-            None => b::description("nothing"),
+            None => DbgDocBldr::description("nothing"),
             Some(v) => v.pretty_debug(v.span.slice(source)),
         }
     }
@@ -788,7 +807,7 @@ where
 {
     fn pretty_debug(&self, source: &str) -> DebugDocBuilder {
         match self {
-            None => b::description("nothing"),
+            None => DbgDocBldr::description("nothing"),
             Some(d) => d.pretty_debug(source),
         }
     }

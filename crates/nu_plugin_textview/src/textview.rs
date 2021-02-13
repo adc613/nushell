@@ -40,7 +40,7 @@ pub fn view_text_value(value: &Value) {
                         term_width = value.as_u64().unwrap_or(term_width as u64) as usize;
                     }
                     "tab_width" => {
-                        tab_width = value.as_u64().unwrap_or(4 as u64);
+                        tab_width = value.as_u64().unwrap_or(4_u64);
                     }
                     "colored_output" => colored_output = value.as_bool().unwrap_or(true),
                     "true_color" => true_color = value.as_bool().unwrap_or(true),
@@ -120,7 +120,7 @@ pub fn view_text_value(value: &Value) {
                 Some(file_path) => {
                     // Let bat do it's thing
                     bat::PrettyPrinter::new()
-                        .input_from_bytes_with_name(s.as_bytes(), file_path)
+                        .input(bat::Input::from_bytes(s.as_bytes()).name(file_path))
                         .term_width(term_width as usize)
                         .tab_width(Some(tab_width as usize))
                         .colored_output(colored_output)

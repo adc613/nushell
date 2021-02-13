@@ -5,18 +5,29 @@ use log::trace;
 use nu_errors::{ArgumentError, ParseError};
 use nu_protocol::hir::{
     self, Binary, Block, ClassifiedCommand, Expression, ExternalRedirection, Flag, FlagKind, Group,
-    InternalCommand, Literal, Member, NamedArguments, Operator, Pipeline, RangeOperator,
-    SpannedExpression, Unit,
+    InternalCommand, Member, NamedArguments, Operator, Pipeline, RangeOperator, SpannedExpression,
+    Unit,
 };
 use nu_protocol::{NamedType, PositionalType, Signature, SyntaxShape, UnspannedPathMember};
-use nu_source::{Span, Spanned, SpannedItem};
+use nu_source::{HasSpan, Span, Spanned, SpannedItem};
 use num_bigint::BigInt;
 
-//use crate::errors::{ParseError, ParseResult};
-use crate::lex::{group, lex, LiteBlock, LiteCommand, LitePipeline};
+use crate::lex::lexer::{lex, parse_block};
+use crate::lex::tokens::{LiteBlock, LiteCommand, LitePipeline};
 use crate::path::expand_path;
 use crate::scope::ParserScope;
 use bigdecimal::BigDecimal;
+
+use self::{
+    def::{parse_definition, parse_definition_prototype},
+    util::trim_quotes,
+    util::verify_and_strip,
+};
+
+mod def;
+mod util;
+
+pub use self::util::garbage;
 
 /// Parses a simple column path, one without a variable (implied or explicit) at the head
 pub fn parse_simple_column_path(
@@ -198,17 +209,6 @@ pub fn parse_full_column_path(
     }
 }
 
-fn trim_quotes(input: &str) -> String {
-    let mut chars = input.chars();
-
-    match (chars.next(), chars.next_back()) {
-        (Some('\''), Some('\'')) => chars.collect(),
-        (Some('"'), Some('"')) => chars.collect(),
-        (Some('`'), Some('`')) => chars.collect(),
-        _ => input.to_string(),
-    }
-}
-
 /// Parse a numeric range
 fn parse_range(
     lite_arg: &Spanned<String>,
@@ -308,6 +308,7 @@ fn parse_operator(lite_arg: &Spanned<String>) -> (SpannedExpression, Option<Pars
         "mod" => Operator::Modulo,
         "&&" => Operator::And,
         "||" => Operator::Or,
+        "**" => Operator::Pow,
         _ => {
             return (
                 garbage(lite_arg.span),
@@ -331,6 +332,9 @@ fn parse_unit(lite_arg: &Spanned<String>) -> (SpannedExpression, Option<ParseErr
         (Unit::Gigabyte, vec!["gb", "GB", "Gb", "gB"]),
         (Unit::Terabyte, vec!["tb", "TB", "Tb", "tB"]),
         (Unit::Petabyte, vec!["pb", "PB", "Pb", "pB"]),
+        (Unit::Kibibyte, vec!["KiB", "kib", "kiB", "Kib"]),
+        (Unit::Mebibyte, vec!["MiB", "mib", "miB", "Mib"]),
+        (Unit::Gibibyte, vec!["GiB", "gib", "giB", "Gib"]),
         (Unit::Nanosecond, vec!["ns"]),
         (Unit::Microsecond, vec!["us"]),
         (Unit::Millisecond, vec!["ms"]),
@@ -345,27 +349,26 @@ fn parse_unit(lite_arg: &Spanned<String>) -> (SpannedExpression, Option<ParseErr
 
     for unit_group in unit_groups.iter() {
         for unit in unit_group.1.iter() {
-            if lite_arg.item.ends_with(unit) {
-                let mut lhs = lite_arg.item.clone();
+            if !lite_arg.item.ends_with(unit) {
+                continue;
+            }
+            let mut lhs = lite_arg.item.clone();
 
-                for _ in 0..unit.len() {
-                    lhs.pop();
-                }
+            for _ in 0..unit.len() {
+                lhs.pop();
+            }
 
-                // these units are allowed to be signed
-                if let Ok(x) = lhs.parse::<i64>() {
-                    let lhs_span =
-                        Span::new(lite_arg.span.start(), lite_arg.span.start() + lhs.len());
-                    let unit_span =
-                        Span::new(lite_arg.span.start() + lhs.len(), lite_arg.span.end());
-                    return (
-                        SpannedExpression::new(
-                            Expression::unit(x.spanned(lhs_span), unit_group.0.spanned(unit_span)),
-                            lite_arg.span,
-                        ),
-                        None,
-                    );
-                }
+            // these units are allowed to be signed
+            if let Ok(x) = lhs.parse::<i64>() {
+                let lhs_span = Span::new(lite_arg.span.start(), lite_arg.span.start() + lhs.len());
+                let unit_span = Span::new(lite_arg.span.start() + lhs.len(), lite_arg.span.end());
+                return (
+                    SpannedExpression::new(
+                        Expression::unit(x.spanned(lhs_span), unit_group.0.spanned(unit_span)),
+                        lite_arg.span,
+                    ),
+                    None,
+                );
             }
         }
     }
@@ -393,7 +396,7 @@ fn parse_invocation(
     if err.is_some() {
         return (garbage(lite_arg.span), err);
     };
-    let (lite_block, err) = group(tokens);
+    let (lite_block, err) = parse_block(tokens);
     if err.is_some() {
         return (garbage(lite_arg.span), err);
     };
@@ -447,6 +450,8 @@ fn parse_dollar_expr(
         //Return invocation
         trace!("Parsing invocation expression");
         parse_invocation(lite_arg, scope)
+    } else if lite_arg.item.contains("..") {
+        parse_range(lite_arg, scope)
     } else if lite_arg.item.contains('.') {
         trace!("Parsing path expression");
         parse_full_column_path(lite_arg, scope)
@@ -674,28 +679,6 @@ fn parse_list(
     (output, error)
 }
 
-fn verify_and_strip(
-    contents: &Spanned<String>,
-    left: char,
-    right: char,
-) -> (String, Option<ParseError>) {
-    let mut chars = contents.item.chars();
-
-    match (chars.next(), chars.next_back()) {
-        (Some(l), Some(r)) if l == left && r == right => {
-            let output: String = chars.collect();
-            (output, None)
-        }
-        _ => (
-            String::new(),
-            Some(ParseError::mismatch(
-                format!("value in {} {}", left, right),
-                contents.clone(),
-            )),
-        ),
-    }
-}
-
 fn parse_table(
     lite_block: &LiteBlock,
     scope: &dyn ParserScope,
@@ -719,7 +702,7 @@ fn parse_table(
         return (garbage(lite_inner.span()), err);
     }
 
-    let (lite_header, err) = group(tokens);
+    let (lite_header, err) = parse_block(tokens);
     if err.is_some() {
         return (garbage(lite_inner.span()), err);
     }
@@ -742,7 +725,7 @@ fn parse_table(
         if err.is_some() {
             return (garbage(arg.span), err);
         }
-        let (lite_cell, err) = group(tokens);
+        let (lite_cell, err) = parse_block(tokens);
         if err.is_some() {
             return (garbage(arg.span), err);
         }
@@ -765,7 +748,7 @@ fn parse_arg(
     scope: &dyn ParserScope,
     lite_arg: &Spanned<String>,
 ) -> (SpannedExpression, Option<ParseError>) {
-    if lite_arg.item.starts_with('$') && parse_range(lite_arg, scope).1.is_some() {
+    if lite_arg.item.starts_with('$') {
         return parse_dollar_expr(&lite_arg, scope);
     }
 
@@ -816,11 +799,11 @@ fn parse_arg(
                 )
             }
         }
-        SyntaxShape::Pattern => {
+        SyntaxShape::GlobPattern => {
             let trimmed = trim_quotes(&lite_arg.item);
             let expanded = expand_path(&trimmed).to_string();
             (
-                SpannedExpression::new(Expression::pattern(expanded), lite_arg.span),
+                SpannedExpression::new(Expression::glob_pattern(expanded), lite_arg.span),
                 None,
             )
         }
@@ -828,7 +811,7 @@ fn parse_arg(
         SyntaxShape::Range => parse_range(&lite_arg, scope),
         SyntaxShape::Operator => parse_operator(&lite_arg),
         SyntaxShape::Unit => parse_unit(&lite_arg),
-        SyntaxShape::Path => {
+        SyntaxShape::FilePath => {
             let trimmed = trim_quotes(&lite_arg.item);
             let expanded = expand_path(&trimmed).to_string();
             let path = Path::new(&expanded);
@@ -873,7 +856,7 @@ fn parse_arg(
                         return (garbage(lite_arg.span), err);
                     }
 
-                    let (lite_block, err) = group(tokens);
+                    let (lite_block, err) = parse_block(tokens);
                     if err.is_some() {
                         return (garbage(lite_arg.span), err);
                     }
@@ -928,7 +911,7 @@ fn parse_arg(
                         return (garbage(lite_arg.span), err);
                     }
 
-                    let (lite_block, err) = group(tokens);
+                    let (lite_block, err) = parse_block(tokens);
                     if err.is_some() {
                         return (garbage(lite_arg.span), err);
                     }
@@ -1156,7 +1139,7 @@ fn parse_parenthesized_expression(
                 return (garbage(lite_arg.span), err);
             }
 
-            let (lite_block, err) = group(tokens);
+            let (lite_block, err) = parse_block(tokens);
             if err.is_some() {
                 return (garbage(lite_arg.span), err);
             }
@@ -1278,7 +1261,7 @@ pub fn parse_math_expression(
                     let (orig_left, left) =
                         working_exprs.pop().expect("This shouldn't be possible");
 
-                    // If we're in shorthand mode, we need to reparse the left-hand side if possibe
+                    // If we're in shorthand mode, we need to reparse the left-hand side if possible
                     let (left, err) = shorthand_reparse(left, orig_left, scope, shorthand_mode);
                     if error.is_none() {
                         error = err;
@@ -1786,6 +1769,36 @@ fn parse_call(
                 error,
             );
         }
+    } else if lite_cmd.parts[0].item == "source" {
+        if lite_cmd.parts.len() != 2 {
+            return (
+                None,
+                Some(ParseError::argument_error(
+                    lite_cmd.parts[0].clone(),
+                    ArgumentError::MissingMandatoryPositional("a path for sourcing".into()),
+                )),
+            );
+        }
+        if lite_cmd.parts[1].item.starts_with('$') {
+            return (
+                None,
+                Some(ParseError::mismatch(
+                    "a filepath constant",
+                    lite_cmd.parts[1].clone(),
+                )),
+            );
+        }
+        if let Ok(contents) = std::fs::read_to_string(&lite_cmd.parts[1].item) {
+            let _ = parse(&contents, 0, scope);
+        } else {
+            return (
+                None,
+                Some(ParseError::mismatch(
+                    "a filepath to a source file",
+                    lite_cmd.parts[1].clone(),
+                )),
+            );
+        }
     } else if lite_cmd.parts.len() > 1 {
         // Check if it's a sub-command
         if let Some(signature) = scope.get_signature(&format!(
@@ -2004,193 +2017,6 @@ fn parse_alias(call: &LiteCommand, scope: &dyn ParserScope) -> Option<ParseError
     None
 }
 
-fn parse_signature(
-    name: &str,
-    s: &Spanned<String>,
-    scope: &dyn ParserScope,
-) -> (Signature, Option<ParseError>) {
-    let mut err = None;
-
-    let (preparsed_params, error) = parse_arg(SyntaxShape::Table, scope, s);
-    if err.is_none() {
-        err = error;
-    }
-    let mut signature = Signature::new(name);
-
-    if let SpannedExpression {
-        expr: Expression::List(preparsed_params),
-        ..
-    } = preparsed_params
-    {
-        for preparsed_param in preparsed_params.iter() {
-            match &preparsed_param.expr {
-                Expression::Literal(Literal::String(st)) => {
-                    let parts: Vec<_> = st.split(':').collect();
-                    if parts.len() == 1 {
-                        if parts[0].starts_with("--") {
-                            // Flag
-                            let flagname = parts[0][2..].to_string();
-                            signature
-                                .named
-                                .insert(flagname, (NamedType::Switch(None), String::new()));
-                        } else {
-                            // Positional
-                            signature.positional.push((
-                                PositionalType::Mandatory(parts[0].to_string(), SyntaxShape::Any),
-                                String::new(),
-                            ));
-                        }
-                    } else if parts.len() == 2 {
-                        if parts[0].starts_with("--") {
-                            // Flag
-                            let flagname = parts[0][2..].to_string();
-                            let shape = match parts[1] {
-                                "int" => SyntaxShape::Int,
-                                "string" => SyntaxShape::String,
-                                "path" => SyntaxShape::Path,
-                                "table" => SyntaxShape::Table,
-                                "unit" => SyntaxShape::Unit,
-                                "number" => SyntaxShape::Number,
-                                "pattern" => SyntaxShape::Pattern,
-                                "range" => SyntaxShape::Range,
-                                "block" => SyntaxShape::Block,
-                                "any" => SyntaxShape::Any,
-                                _ => {
-                                    if err.is_none() {
-                                        err = Some(ParseError::mismatch(
-                                            "params with known types",
-                                            s.clone(),
-                                        ));
-                                    }
-                                    SyntaxShape::Any
-                                }
-                            };
-                            signature.named.insert(
-                                flagname,
-                                (NamedType::Optional(None, shape), String::new()),
-                            );
-                        } else {
-                            // Positional
-                            let name = parts[0].to_string();
-                            let shape = match parts[1] {
-                                "int" => SyntaxShape::Int,
-                                "string" => SyntaxShape::String,
-                                "path" => SyntaxShape::Path,
-                                "table" => SyntaxShape::Table,
-                                "unit" => SyntaxShape::Unit,
-                                "number" => SyntaxShape::Number,
-                                "pattern" => SyntaxShape::Pattern,
-                                "range" => SyntaxShape::Range,
-                                "block" => SyntaxShape::Block,
-                                "any" => SyntaxShape::Any,
-                                _ => {
-                                    if err.is_none() {
-                                        err = Some(ParseError::mismatch(
-                                            "params with known types",
-                                            s.clone(),
-                                        ));
-                                    }
-                                    SyntaxShape::Any
-                                }
-                            };
-                            signature
-                                .positional
-                                .push((PositionalType::Mandatory(name, shape), String::new()));
-                        }
-                    } else if err.is_none() {
-                        err = Some(ParseError::mismatch("param with type", s.clone()));
-                    }
-                }
-                _ => {
-                    if err.is_none() {
-                        err = Some(ParseError::mismatch("parameter", s.clone()));
-                    }
-                }
-            }
-        }
-        (signature, err)
-    } else {
-        (
-            signature,
-            Some(ParseError::mismatch("parameters", s.clone())),
-        )
-    }
-}
-fn parse_definition(call: &LiteCommand, scope: &dyn ParserScope) -> Option<ParseError> {
-    // A this point, we've already handled the prototype and put it into scope
-    // So our main goal here is to parse the block now that the names and
-    // prototypes of adjacent commands are also available
-
-    if call.parts.len() == 4 {
-        if call.parts.len() != 4 {
-            return Some(ParseError::mismatch("definition", call.parts[0].clone()));
-        }
-
-        if call.parts[0].item != "def" {
-            return Some(ParseError::mismatch("definition", call.parts[0].clone()));
-        }
-
-        let name = trim_quotes(&call.parts[1].item);
-        let (signature, err) = parse_signature(&name, &call.parts[2], scope);
-        if err.is_some() {
-            return err;
-        };
-
-        let mut chars = call.parts[3].chars();
-        match (chars.next(), chars.next_back()) {
-            (Some('{'), Some('}')) => {
-                // We have a literal block
-                let string: String = chars.collect();
-
-                let (tokens, err) = lex(&string, call.parts[3].span.start() + 1);
-                if err.is_some() {
-                    return err;
-                };
-                let (lite_block, err) = group(tokens);
-                if err.is_some() {
-                    return err;
-                };
-
-                let (mut block, err) = classify_block(&lite_block, scope);
-
-                block.params = signature;
-                block.params.name = name;
-
-                scope.add_definition(block);
-
-                err
-            }
-            _ => Some(ParseError::mismatch("body", call.parts[3].clone())),
-        }
-    } else {
-        Some(ParseError::internal_error(
-            "need a block".to_string().spanned(call.span()),
-        ))
-    }
-}
-
-fn parse_definition_prototype(call: &LiteCommand, scope: &dyn ParserScope) -> Option<ParseError> {
-    let mut err = None;
-
-    if call.parts.len() != 4 {
-        return Some(ParseError::mismatch("definition", call.parts[0].clone()));
-    }
-
-    if call.parts[0].item != "def" {
-        return Some(ParseError::mismatch("definition", call.parts[0].clone()));
-    }
-
-    let name = trim_quotes(&call.parts[1].item);
-    let (signature, error) = parse_signature(&name, &call.parts[2], scope);
-    if err.is_none() {
-        err = error;
-    }
-
-    scope.add_definition(Block::new(signature, vec![], IndexMap::new(), call.span()));
-
-    err
-}
-
 pub fn classify_block(
     lite_block: &LiteBlock,
     scope: &dyn ParserScope,
@@ -2285,6 +2111,14 @@ pub fn classify_block(
         }
     }
 
+    let definitions = scope.get_definitions();
+    for definition in definitions.into_iter() {
+        let name = definition.params.name.clone();
+        if !output.definitions.contains_key(&name) {
+            output.definitions.insert(name, definition.clone());
+        }
+    }
+
     (output, error)
 }
 
@@ -2297,7 +2131,7 @@ pub fn parse(
     if error.is_some() {
         return (Block::basic(), error);
     }
-    let (lite_block, error) = group(output);
+    let (lite_block, error) = parse_block(output);
     if error.is_some() {
         return (Block::basic(), error);
     }
@@ -2305,18 +2139,13 @@ pub fn parse(
     classify_block(&lite_block, scope)
 }
 
-/// Easy shorthand function to create a garbage expression at the given span
-pub fn garbage(span: Span) -> SpannedExpression {
-    SpannedExpression::new(Expression::Garbage, span)
-}
-
 #[test]
-fn unit_parse_byte_units() -> Result<(), ParseError> {
+fn unit_parse_byte_units() {
     struct TestCase {
         string: String,
         value: i64,
         unit: Unit,
-    };
+    }
 
     let cases = [
         TestCase {
@@ -2389,6 +2218,41 @@ fn unit_parse_byte_units() -> Result<(), ParseError> {
             value: 27,
             unit: Unit::Petabyte,
         },
+        TestCase {
+            string: String::from("10kib"),
+            value: 10,
+            unit: Unit::Kibibyte,
+        },
+        TestCase {
+            string: String::from("123KiB"),
+            value: 123,
+            unit: Unit::Kibibyte,
+        },
+        TestCase {
+            string: String::from("24kiB"),
+            value: 24,
+            unit: Unit::Kibibyte,
+        },
+        TestCase {
+            string: String::from("10mib"),
+            value: 10,
+            unit: Unit::Mebibyte,
+        },
+        TestCase {
+            string: String::from("123MiB"),
+            value: 123,
+            unit: Unit::Mebibyte,
+        },
+        TestCase {
+            string: String::from("10gib"),
+            value: 10,
+            unit: Unit::Gibibyte,
+        },
+        TestCase {
+            string: String::from("123GiB"),
+            value: 123,
+            unit: Unit::Gibibyte,
+        },
     ];
 
     for case in cases.iter() {
@@ -2411,5 +2275,4 @@ fn unit_parse_byte_units() -> Result<(), ParseError> {
             )
         );
     }
-    Ok(())
 }
